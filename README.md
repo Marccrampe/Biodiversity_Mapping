@@ -74,6 +74,9 @@ for i in range(data_cube.size().getInfo()):
 
 print("🎉 Processing Complete!")
 ```
-<img width="556" alt="Capture d’écran 2025-03-19 à 15 29 43" src="https://github.com/user-attachments/assets/d4627d90-cb06-4f6e-a030-cb4161c68df7" />
 <img width="552" alt="Capture d’écran 2025-03-19 à 15 30 07" src="https://github.com/user-attachments/assets/68018e5e-49e1-4b97-9469-1ed8f2a39b02" />
+Sentinel-2
+<img width="556" alt="Capture d’écran 2025-03-19 à 15 29 43" src="https://github.com/user-attachments/assets/d4627d90-cb06-4f6e-a030-cb4161c68df7" />
+NDVI
 <img width="551" alt="Capture d’écran 2025-03-19 à 15 28 14" src="https://github.com/user-attachments/assets/d3291d1f-4115-4df1-8ad8-a4e55f9ecdce" />
+NDWI

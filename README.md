@@ -1,82 +1,137 @@
-# 🌍 GEE & Google Cloud Storage Processing Package
+# 🛰️ Sentinel-2 Entropy Analysis Pipeline
 
-This repository contains a set of functions for processing **Google Earth Engine (GEE)** data and exporting raster images to **Google Cloud Storage (GCS)**.  
-The package includes functions for **retrieving Sentinel-2 composites**, **computing vegetation indices**, **loading rasters**, and **moving processed images**.
+This pipeline computes **spatial**, **temporal**, and **spatio-temporal entropy** maps from a Sentinel-2 vegetation index (NDVI, SAVI, or EVI). It combines Google Earth Engine (GEE) and local Python processing for a scalable and modular entropy-based analysis of ecosystem dynamics.
 
 ---
 
-## 📦 **Package Structure**
+## 📦 Outputs
 
-│── main.py # Example script for running the package 
+The pipeline generates a single multi-band GeoTIFF that includes:
 
-│── ee_preprocess.py # Functions for GEE processing & data cube creation
+1. ✅ **Per-date spatial entropy**: Shannon / Rényi / Rao-Q entropy computed per date using a spatial sliding window  
+2. ✅ **Pixelwise temporal variability**: entropy computed **over time** for each pixel  
+3. ✅ **3D spatio-temporal entropy**: entropy computed from a local cube (T × W × W) per pixel  
 
-│── rasterdiv_preprocess.py # Functions for loading & processing raster images
+🗂️ **TIFF file is named automatically** for traceability:
 
-│── ee_logistic.py # Functions for exporting & managing images on GCS 
+```
+{entropy}_{index}_{AOI}_{start}_{end}_w{window_size}.tif
+```
 
+> Example: `shannon_NDVI_AoI_France_2023-06-01_2023-06-30_w7.tif`
 
-│── requirements.txt # Required Python dependencies 
+---
 
-│── README.md # Documentation 
-#
+## 📈 What is Computed?
 
-## ⚡ **Installation**
-Before running the script, install the necessary dependencies:
+### 1. Spatial Entropy per Time Step
+For each image in the time series, the selected entropy is computed over a W×W sliding window:
+- **Shannon**: classic entropy measuring local diversity
+- **Rényi (α=0,2)**: generalized entropy family (α=2 favors dominant classes)
+- **Rao Q**: integrates pairwise distances between pixel values
+
+### 2. Pixelwise Temporal Entropy
+For each pixel across all dates:
+- Shannon entropy of the temporal sequence
+- Measures how stable/dynamic a pixel is through time
+
+🟢 **Use case**: detect dynamic land uses like crops or urban edges
+
+### 3. 3D Spatio-Temporal Entropy
+For each pixel, a local 3D window is extracted:
+- Shape: (T, W, W)
+- Flattened, then entropy is computed over values
+
+🧠 This reveals **complexity in space and time**, great for identifying ecotones or transitional habitats.
+
+Supports:
+- `shannon`
+- `renyi_0`, `renyi_2`
+- `rao_q`
+
+---
+
+## 🧼 Land Cover Masking (Vegetation Only)
+
+Before entropy computation, each time step is masked to exclude non-natural land cover:
+
+- ✅ **Primary mask**: [Dynamic World](https://developers.google.com/earth-engine/datasets/catalog/GOOGLE_DYNAMICWORLD_V1)
+- 🟡 **Fallback**: [ESA WorldCover 2020](https://developers.google.com/earth-engine/datasets/catalog/ESA_WorldCover_v200)
+
+**Masked classes include:**
+- Water (0)
+- Built-up (5)
+- Snow/Ice (6)
+- Barren (7)
+- Impervious areas (8)
+
+Only natural surfaces (forests, shrubs, crops, grasslands) are retained.
+
+---
+
+## 🧪 Parameters
+
+| Flag              | Description                                          | Example              |
+|-------------------|------------------------------------------------------|----------------------|
+| `--index`         | Index to compute (NDVI, SAVI, EVI)                   | `--index NDVI`       |
+| `--entropy`       | Type of entropy to use (`shannon`, `renyi_0`, `renyi_2`, `rao_q`) | `--entropy shannon` |
+| `--start`         | Start date                                           | `--start 2023-06-01` |
+| `--end`           | End date                                             | `--end 2023-06-30`   |
+| `--frequency`     | Temporal step (e.g. 10D, 1M)                         | `--frequency 10D`    |
+| `--window_size`   | Size of spatial window (must be odd)                 | `--window_size 7`    |
+| `--geojson`       | Path to AOI file                                     | `--geojson AOI/AoI_France.json` |
+| `--bucket`        | GCS bucket name                                      | `--bucket my-bucket` |
+| `--input_folder`  | Subfolder for input cube                             | `--input_folder rasterdiv_map` |
+| `--entropy_folder`| Subfolder for output entropy files                   | `--entropy_folder entropy`     |
+
+---
+
+## 💻 Example Command
+
 ```bash
-pip install -r requirements.txt
-```
-🔥 How to Use
-An example script is provided in main.py that demonstrates how to:
-
-✅ Load an AOI (GeoJSON) from GCS
-✅ Create a Sentinel-2 composite & vegetation indices
-✅ Export images to Google Cloud Storage
-✅ Process and move images after analysis
-
-Run the script with:
-```bash
-python main.py
+python entropy_pipeline.py \
+  --index NDVI \
+  --entropy shannon \
+  --start 2023-06-01 \
+  --end 2023-06-30 \
+  --frequency 10D \
+  --window_size 7 \
+  --geojson AOI/AoI_France.json \
+  --bucket gchm-predictions-test \
+  --input_folder rasterdiv_map \
+  --entropy_folder entropy
 ```
 
-🚀 Run on Google Colab
-If you prefer running the code on Google Colab, use the following notebook:
+---
 
+## 🌍 Requirements
 
-https://colab.research.google.com/drive/1IvhUnJ5JT0iXzt_eNTR_E6MtkYBLlXON?usp=sharing
+- Python 3.8+
+- Google Earth Engine Python API
+- `rasterio`, `numpy`, `pandas`, `scipy`, `google-cloud-storage`
 
+✅ Ensure that Earth Engine and GCS credentials are correctly configured.
 
-📌 Example Usage (from main.py)
-```python
+---
 
+## 📁 Project Structure
 
-from ee_preprocess import load_and_validate_geojson, create_data_cube
-from ee_logistic import export_image_to_gcs, move_image_after_analysis
-
-# ✅ Define parameters
-bucket_name = "gchm-predictions-test"
-geojson_path = "AOI/AoI_Florida.json"
-date_range = ("2023-06-01", "2023-06-30")
-indices = ["S2", "NDVI", "NDWI"]
-input_folder = "rasterdiv_data"
-output_folder = "rasterdiv_map"
-
-# ✅ Load AOI from GCS
-aoi = load_and_validate_geojson(bucket_name, geojson_path)
-
-# ✅ Create a data cube with Sentinel-2 & vegetation indices
-data_cube = create_data_cube(aoi, date_range[0], date_range[1], indices=indices)
-
-# ✅ Export images to GCS
-for i in range(data_cube.size().getInfo()):
-    image = data_cube.toList(data_cube.size()).get(i)
-    export_image_to_gcs(image, f"image_{i}.tif", bucket_name, input_folder, aoi)
-
-print("🎉 Processing Complete!")
 ```
-<img width="552" alt="Capture d’écran 2025-03-19 à 15 30 07" src="https://github.com/user-attachments/assets/68018e5e-49e1-4b97-9469-1ed8f2a39b02" />
-Sentinel-2
-<img width="556" alt="Capture d’écran 2025-03-19 à 15 29 43" src="https://github.com/user-attachments/assets/d4627d90-cb06-4f6e-a030-cb4161c68df7" />
-NDVI
-<img width="551" alt="Capture d’écran 2025-03-19 à 15 28 14" src="https://github.com/user-attachments/assets/d3291d1f-4115-4df1-8ad8-a4e55f9ecdce" />
-NDWI
+entropy_pipeline.py         # Main pipeline
+parser.py                   # Argument parser
+ee_preprocess.py            # GEE-related functions
+rasterdiv_preprocess.py     # Entropy computation functions
+AOI/                        # Folder with AOI GeoJSON files
+```
+
+---
+
+## 🤝 Contributions
+
+Feel free to open an issue or submit a PR to improve entropy models, extend entropy measures, or optimize 3D performance.
+
+---
+
+## 👋 Authors
+
+Developed by Marc CRAMPE, 2024  

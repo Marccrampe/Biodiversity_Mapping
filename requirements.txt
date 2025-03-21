@@ -1,5 +1,5 @@
 earthengine-api
 google-cloud-storage
-numpy
+numpy<2
 rasterio
 requests

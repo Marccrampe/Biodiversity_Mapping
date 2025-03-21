@@ -5,7 +5,7 @@ import requests
 from io import BytesIO  
 from datetime import datetime, timedelta  
 from google.cloud import storage  
-
+import pandas as pd
 
 def load_and_validate_geojson(bucket_name, geojson_path):
     """Charge et valide un fichier GeoJSON depuis un bucket Google Cloud Storage."""
@@ -65,15 +65,13 @@ def create_composite(start_date, aoi, cloud_percentage=50):
     lowest_cloud_images = sorted_collection.limit(3)
     
     return lowest_cloud_images.median().toFloat()  # ✅ Ensure output is Float32
-
-    
-def compute_indices(image, indices=["NDVI", "NDWI", "SAVI", "BAI"]):
+def compute_indices(image, indices=["NDVI", "NDWI", "SAVI", "EVI", "MSAVI", "BAI"]):
     """
     Computes multiple vegetation indices and returns only the selected ones.
 
     Parameters:
     - image: ee.Image (Sentinel-2 composite)
-    - indices: list of indices to compute ["NDVI", "NDWI", "SAVI", "BAI", etc.]
+    - indices: list of indices to compute ["NDVI", "NDWI", "SAVI", "EVI", "MSAVI", "BAI"]
 
     Returns:
     - An ee.Image containing only the selected indices.
@@ -99,6 +97,29 @@ def compute_indices(image, indices=["NDVI", "NDWI", "SAVI", "BAI"]):
             }).rename("SAVI")
         bands.append(savi)
 
+    # EVI = (G * (NIR - Red)) / (NIR + (C1 * Red) - (C2 * Blue) + L)
+    if "EVI" in indices:
+        evi = image.expression(
+            "(G * (NIR - RED)) / (NIR + (C1 * RED) - (C2 * BLUE) + L)", {
+                "NIR": image.select("B8"),
+                "RED": image.select("B4"),
+                "BLUE": image.select("B2"),
+                "G": 2.5,  # Gain factor
+                "C1": 6.0,  # Coefficient for RED
+                "C2": 7.5,  # Coefficient for BLUE
+                "L": 1.0  # Soil adjustment factor
+            }).rename("EVI")
+        bands.append(evi)
+
+    # MSAVI = (2 * NIR + 1 - sqrt((2 * NIR + 1)^2 - 8 * (NIR - Red))) / 2
+    if "MSAVI" in indices:
+        msavi = image.expression(
+            "(2 * NIR + 1 - sqrt((2 * NIR + 1) ** 2 - 8 * (NIR - RED))) / 2", {
+                "NIR": image.select("B8"),
+                "RED": image.select("B4")
+            }).rename("MSAVI")
+        bands.append(msavi)
+
     # BAI = (B - NIR) / (B + NIR)  (custom formula)
     if "BAI" in indices:
         bai = image.expression(
@@ -110,9 +131,8 @@ def compute_indices(image, indices=["NDVI", "NDWI", "SAVI", "BAI"]):
 
     # Combine all selected indices into a single image
     return ee.Image(bands).toFloat()
+
     
-
-
 
 def create_data_cube(aoi, start_date, end_date, period="10D", indices=["NDVI"]):
     """
@@ -177,115 +197,86 @@ def create_data_cube(aoi, start_date, end_date, period="10D", indices=["NDVI"]):
     return ee.ImageCollection(cube)
 
 
-    
-        
-    # Function to get the DLC mask from Dynamic World (GOOGLE/DYNAMICWORLD/V1)
-def get_dlc_mask(aoi, date_array):
+def get_dlc_mask_numpy(aoi, start_date, end_date, period="10D"):
     """
-    For each date in date_array, tries to get the mask from Dynamic World.
-    If no DW mask is generated (or if it is empty), we use a static mask from ESA WorldCover.
-    The returned mask is a NumPy array (unstructured).
-
-    Parameters:
-      - aoi: area of interest (an ee.Geometry)
-      - date_array: list of dates (format "YYYY-MM-DD")
-
-    Returns:
-      - Dictionary mapping each date to a NumPy array representing the mask
+    Retrieves land cover masks (DLC) as NumPy arrays for each date.
+    Keeps only classes relevant for biodiversity (trees, grass, crops, shrubs, etc.).
+    Excludes built areas and bare ground. Falls back to ESA WorldCover if DW unavailable.
     """
+    masks = {}
+    dates = pd.date_range(start=start_date, end=end_date, freq=period)
 
-    masks = {}  # Dictionary to store masks for each date
-
-    # --- Load ESA WorldCover mask once ---
+    # Load ESA fallback (exclude built + bare)
+    esa_mask_numeric = None
     try:
-        # Load ESA WorldCover v200 (this is a collection, so we take the first image)
         esa_image = ee.ImageCollection("ESA/WorldCover/v200").first().clip(aoi)
-        # Define excluded classes for ESA (e.g., 50, 60, 70, 80)
-        exclude_classes_esa = [50, 60, 70, 80]
+        exclude_classes = [50, 60]  # 50 = Urban, 60 = Bare Sparse Vegetation
+        mask = ee.Image(1)
+        for cls in exclude_classes:
+            mask = mask.multiply(esa_image.select("Map").neq(cls))
+        esa_mask_resampled = mask.reproject(crs='EPSG:4326', scale=10)
 
-        # Create a binary mask: pixel value is 1 if "Map" is not in excluded classes
-        mask_product = ee.Image(1)
-        for cls in exclude_classes_esa:
-            mask_product = mask_product.multiply(esa_image.select("Map").neq(cls))
-
-        esa_mask_resampled = mask_product.reproject(crs='EPSG:4326', scale=10)
-
-        # Get the download URL for the ESA mask in NPY format
         url_esa = esa_mask_resampled.getDownloadURL({
             'scale': 10,
             'region': aoi,
             'format': 'NPY'
         })
-        response_esa = requests.get(url_esa, stream=True)
-        if response_esa.status_code == 200:
-            mask_array_esa = np.load(BytesIO(response_esa.content))
-            if mask_array_esa.dtype.names is not None:
-                field = mask_array_esa.dtype.names[0]
-                esa_mask_numeric = mask_array_esa[field]
-            else:
-                esa_mask_numeric = mask_array_esa
-            print("ESA mask successfully loaded.")
+        r = requests.get(url_esa, stream=True)
+        if r.status_code == 200:
+            esa_np = np.load(BytesIO(r.content))
+            esa_mask_numeric = esa_np[esa_np.dtype.names[0]] if esa_np.dtype.names else esa_np
+            print("✅ ESA mask loaded.")
         else:
-            print("HTTP error", response_esa.status_code, "while downloading ESA mask.")
-            esa_mask_numeric = None
+            print(f"❌ ESA mask HTTP error: {r.status_code}")
     except Exception as e:
-        print("Exception while loading ESA mask:", e)
-        esa_mask_numeric = None
+        print(f"❌ ESA mask error: {e}")
 
-    # --- Process each date ---
-    for start_date in date_array:
-        mask_numeric = None  # Final mask for this date
-        # Compute the 90-day period from start_date
+    # Loop over dates
+    for date in dates:
+        date_str = date.strftime("%Y-%m-%d")
+        print(f"📅 Processing mask for {date_str}")
+        mask_np = None
+
         try:
-            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-            end_date_obj = start_date_obj + timedelta(days=90)
-            end_date = end_date_obj.strftime("%Y-%m-%d")
-        except Exception as e:
-            print(f"[{start_date}] Error computing date range: {e}")
-            continue
+            dw_image = ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1") \
+                .filterBounds(aoi) \
+                .filterDate(date_str, (date + timedelta(days=30)).strftime("%Y-%m-%d")) \
+                .first()
 
-        # 1. Attempt to get Dynamic World mask
-        try:
-            dlc_collection = ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
-            dlc_filtered = dlc_collection.filterBounds(aoi).filterDate(start_date, end_date).first()
-            if dlc_filtered is not None:
-                dlc_filtered = dlc_filtered.clip(aoi)
-                # Define excluded classes for DW (e.g., 0, 5, 6, 7, 8)
-                exclude_classes = [0, 5, 6, 7, 8]
-                # Create a binary mask: pixel is 1 if it does not belong to excluded classes
-                dlc_mask = dlc_filtered.select("label").neq(ee.Image.constant(exclude_classes)).reduce(ee.Reducer.min())
-                dlc_mask_binary = dlc_mask.eq(1)
-                dlc_mask_resampled = dlc_mask_binary.reproject(crs='EPSG:4326', scale=10)
+            if dw_image:
+                dw_image = dw_image.clip(aoi)
 
-                url_dw = dlc_mask_resampled.getDownloadURL({
+                # ❌ Only exclude built area and bare ground (6 & 7)
+                exclude = [6, 7]
+                dw_mask = dw_image.select("label").neq(ee.Image.constant(exclude)).reduce(ee.Reducer.min())
+                binary_mask = dw_mask.eq(1).reproject(crs='EPSG:4326', scale=10)
+
+                url = binary_mask.getDownloadURL({
                     'scale': 10,
                     'region': aoi,
                     'format': 'NPY'
                 })
-                response_dw = requests.get(url_dw, stream=True)
-                if response_dw.status_code == 200:
-                    mask_array = np.load(BytesIO(response_dw.content))
-                    if mask_array.dtype.names is not None:
-                        field = mask_array.dtype.names[0]
-                        mask_numeric = mask_array[field]
-                    else:
-                        mask_numeric = mask_array
-                    print(f"[{start_date}] DW mask generated.")
+                r = requests.get(url, stream=True)
+                if r.status_code == 200:
+                    dlc_np = np.load(BytesIO(r.content))
+                    mask_np = dlc_np[dlc_np.dtype.names[0]] if dlc_np.dtype.names else dlc_np
+                    print(f"✅ DW mask loaded for {date_str}")
                 else:
-                    print(f"[{start_date}] HTTP error {response_dw.status_code} for DW.")
+                    print(f"❌ DW HTTP error for {date_str}: {r.status_code}")
             else:
-                print(f"[{start_date}] No DW image found.")
+                print(f"⚠️ No DW image for {date_str}")
+
         except Exception as e:
-            print(f"[{start_date}] Exception processing DW: {e}")
+            print(f"❌ DW error for {date_str}: {e}")
 
-        # 2. If DW mask is unavailable or empty, use the preloaded ESA mask
-        if mask_numeric is None or np.all(mask_numeric == 0):
-            print(f"[{start_date}] Using ESA static mask.")
-            mask_numeric = esa_mask_numeric
+        # Fallback to ESA if needed
+        if mask_np is None or np.all(mask_np == 0):
+            print(f"🟡 Using ESA fallback for {date_str}")
+            mask_np = esa_mask_numeric
 
-        if mask_numeric is not None:
-            masks[start_date] = mask_numeric
+        if mask_np is not None:
+            masks[date_str] = mask_np
         else:
-            print(f"[{start_date}] No mask could be generated.")
+            print(f"❌ No mask available for {date_str}")
 
     return masks

@@ -73,7 +73,7 @@ Only natural surfaces (forests, shrubs, crops, grasslands) are retained.
 
 | Flag              | Description                                          | Example              |
 |-------------------|------------------------------------------------------|----------------------|
-| `--index`         | Index to compute (NDVI, SAVI, EVI)                   | `--index NDVI`       |
+| `--index`         | Index to compute (NDVI, NDWI, SAVI, EVI, MSAVI, BAI) | `--index NDVI`       |
 | `--entropy`       | Type of entropy to use (`shannon`, `renyi_0`, `renyi_2`, `rao_q`) | `--entropy shannon` |
 | `--start`         | Start date                                           | `--start 2023-06-01` |
 | `--end`           | End date                                             | `--end 2023-06-30`   |

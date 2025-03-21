@@ -125,6 +125,20 @@ AOI/                        # Folder with AOI GeoJSON files
 ```
 
 ---
+## 🗾 Visualization example
+---
+# 🗾 Shannon Entropy 
+
+<img width="666" alt="Capture d’écran 2025-03-21 à 14 43 23" src="https://github.com/user-attachments/assets/64a5de09-f607-4cf8-bc65-fdfb2070bab4" />
+
+# 🗾 Temporal pixel variation Entropy 
+---
+<img width="668" alt="Capture d’écran 2025-03-21 à 14 43 58" src="https://github.com/user-attachments/assets/b04ebae1-5294-4a67-baf2-02c737d2d72f" />
+
+# 🗾 3D (Spatial + Temporal) Shannon  Entropy 
+---
+<img width="667" alt="Capture d’écran 2025-03-21 à 14 44 19" src="https://github.com/user-attachments/assets/0c9ea1eb-ab35-491b-b356-711a4d6586c1" />
+
 
 ## 🤝 Contributions
 
@@ -134,4 +148,4 @@ Feel free to open an issue or submit a PR to improve entropy models, extend entr
 
 ## 👋 Authors
 
-Developed by Marc CRAMPE, 2024  
+Developed by Marc CRAMPE, March 2025
